@@ -11,14 +11,16 @@ const native = vi.hoisted(() => ({
   moved: vi.fn(),
   resized: vi.fn(),
   label: 'pet',
-  os: 'windows',
+  osType: vi.fn(() => 'windows'),
+  scaleFactor: vi.fn(),
 }))
-vi.mock('@tauri-apps/plugin-os', () => ({ type: () => native.os }))
+vi.mock('@tauri-apps/plugin-os', () => ({ type: native.osType }))
 vi.mock('@tauri-apps/api/core', () => ({ invoke: native.invoke }))
 vi.mock('@tauri-apps/api/event', () => ({ listen: native.listen }))
 vi.mock('@tauri-apps/api/window', () => ({
   getCurrentWindow: () => ({
     label: native.label,
+    scaleFactor: native.scaleFactor,
     innerPosition: native.position,
     isVisible: native.visible,
     onMoved: native.moved,
@@ -73,7 +75,8 @@ beforeEach(() => {
   handlers.clear()
   disposers.length = 0
   native.label = 'pet'
-  native.os = 'windows'
+  native.osType.mockReturnValue('windows')
+  native.scaleFactor.mockResolvedValue(1)
   native.position.mockResolvedValue({ x: 100, y: 100 })
   native.visible.mockResolvedValue(true)
   native.moved.mockImplementation(handler => subscribe('moved', handler))
@@ -93,7 +96,7 @@ afterEach(() => {
 
 describe('pet cursor input lifecycle', () => {
   it('shapes the linux input region to the hitbox instead of toggling click-through', async () => {
-    native.os = 'linux'
+    native.osType.mockReturnValue('linux')
     vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
       callback(0)
       return 1
@@ -109,7 +112,7 @@ describe('pet cursor input lifecycle', () => {
   })
 
   it('sends the linux input region in device pixels under a fractional device pixel ratio', async () => {
-    native.os = 'linux'
+    native.osType.mockReturnValue('linux')
     vi.stubGlobal('devicePixelRatio', 1.5)
     vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
       callback(0)
@@ -153,6 +156,19 @@ describe('pet cursor input lifecycle', () => {
     await act(async () => {
       position.resolve({ x: 100, y: 100 })
     })
+    expect(requests()).toEqual([true])
+  })
+
+  it('retries the window position read on the next sample after a failed resize refresh', async () => {
+    renderHook(() => useOmitIgnoreCursorEvents({ current: element }))
+    await flush()
+    await emit('device-mouse-move', { x: 500, y: 500 })
+    native.position.mockRejectedValueOnce(new Error('position failed'))
+    await emit('resized', {})
+    await flush()
+    await emit('device-mouse-move', { x: 500, y: 500 })
+    await flush()
+    expect(native.position).toHaveBeenCalledTimes(3)
     expect(requests()).toEqual([true])
   })
 
@@ -361,6 +377,26 @@ describe('pet cursor input lifecycle', () => {
     await emit('device-mouse-move', { x: 400, y: 400 })
     await emit('device-mouse-move', { x: 300, y: 300 })
     expect(requests()).toEqual([true, false])
+  })
+
+  it('hit-tests macOS logical cursor coordinates across monitors with different scales', async () => {
+    native.osType.mockReturnValue('macos')
+    vi.stubGlobal('devicePixelRatio', 2)
+    native.scaleFactor.mockResolvedValue(2)
+    native.position.mockResolvedValue({ x: 200, y: 200 })
+    renderHook(() => useOmitIgnoreCursorEvents({ current: element }))
+    await flush()
+    await emit('device-mouse-move', { x: 250, y: 150 })
+    await emit('device-mouse-move', { x: 120, y: 120 })
+    expect(requests()).toEqual([true, false])
+
+    native.scaleFactor.mockResolvedValue(1)
+    native.position.mockResolvedValue({ x: -400, y: 100 })
+    await emit('moved', { x: -800, y: 200 })
+    await flush()
+    expect(native.position).toHaveBeenCalledTimes(2)
+    await emit('device-mouse-move', { x: -380, y: 120 })
+    expect(requests()).toEqual([true, false, true, false])
   })
 
   it('does not bind pet input handling to the main window', async () => {

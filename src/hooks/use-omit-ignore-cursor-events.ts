@@ -5,6 +5,7 @@ import { listen } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { type } from '@tauri-apps/plugin-os'
 import { useEffect, useRef } from 'react'
+import { screenCoordinateScale, windowScreenPosition } from '@/utils/screen-coordinates'
 
 interface DeviceMousePosition {
   x: number
@@ -36,7 +37,8 @@ export function useOmitIgnoreCursorEvents(elementRef: RefObject<HTMLElement | nu
     if (appWindow.label !== 'pet')
       return
     // Linux 走输入形状而非整窗穿透：XWayland 下穿透后收不到全局鼠标流，桌宠再也点不到（issue #649）。
-    const inputRegion = type() === 'linux'
+    const platform = type()
+    const inputRegion = platform === 'linux'
     let appliedRegion: PetInputRect | undefined
     let regionFrame: number | undefined
     let disposed = false
@@ -112,13 +114,15 @@ export function useOmitIgnoreCursorEvents(elementRef: RefObject<HTMLElement | nu
     async function refreshWindowPosition(): Promise<void> {
       const revision = ++geometryRevision
       try {
-        const position = await appWindow.innerPosition()
+        const position = await windowScreenPosition(appWindow, true)
         if (!disposed && revision === geometryRevision) {
           windowPosition = position
           refreshFromState()
         }
       }
       catch (error) {
+        if (!disposed && revision === geometryRevision)
+          windowPosition = undefined
         if (!disposed)
           console.warn('[pet] PET_INPUT_POSITION_FAILED:', error)
       }
@@ -131,7 +135,7 @@ export function useOmitIgnoreCursorEvents(elementRef: RefObject<HTMLElement | nu
       if (windowPosition === undefined)
         return undefined
       const rect = element.getBoundingClientRect()
-      const scale = globalThis.devicePixelRatio || 1
+      const scale = screenCoordinateScale()
       const left = windowPosition.x + rect.left * scale
       const top = windowPosition.y + rect.top * scale
       return x >= left && x <= left + rect.width * scale && y >= top && y <= top + rect.height * scale
@@ -168,6 +172,10 @@ export function useOmitIgnoreCursorEvents(elementRef: RefObject<HTMLElement | nu
 
     const subscriptions = [
       appWindow.onMoved(({ payload }) => {
+        if (platform === 'macos') {
+          void refreshWindowPosition()
+          return
+        }
         geometryRevision++
         windowPosition = payload
         refreshFromState()
