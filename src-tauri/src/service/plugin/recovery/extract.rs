@@ -22,6 +22,9 @@ static PLUGIN_REF_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
         //  形如 `dsh-tauri-rightclick: pending (waiting for service: remote.session)`，
         //  此前因含冒号括号不被 is_package_name 接受而漏检）
         r#"([A-Za-z0-9@/_.\-]+):\s*pending\s*\(waiting for service:[^)]*\)"#,
+        // 前端 boot 失败页的逐项状态行：<pkg>: failed / <pkg>: import failed (...)
+        // （apply 抛错或入口导入失败时条目停在非 active 状态，文本与 pending 行同形）
+        r#"([A-Za-z0-9@/_.\-]+):\s*(?:failed|import failed)"#,
     ]
     .iter()
     .map(|p| Regex::new(p).expect("static plugin ref pattern"))
@@ -109,6 +112,7 @@ pub(super) fn classify_reason(text: &str) -> (String, String) {
     }
     if text.contains("failed to import loader entry")
         || text.contains("failed to apply loader entry")
+        || text.contains("did not activate")
     {
         return ("load_failed".into(), String::new());
     }
@@ -230,6 +234,21 @@ foo bar
         assert!(extract_plugin_refs(log).is_empty());
         let log2 = "some package: pending without parentheses\n";
         assert!(extract_plugin_refs(log2).is_empty());
+    }
+
+    #[test]
+    fn extract_refs_from_boot_entry_state_line() {
+        // 用户报告的真实失败文本：桌面端把 boot 失败页压成单行后上报，
+        // 卡片标题不再独占一行，逐项状态行仍保留 `<name>: failed`。
+        let log = "Failed to load plugins dsh-office-kit web boot: 1 entry did not activate dsh-office-kit: failed";
+        assert_eq!(extract_plugin_refs(log), vec!["dsh-office-kit"]);
+        assert_eq!(classify_reason(log).0, "load_failed");
+
+        let import_failed = "web boot: 1 entry did not activate\n@scope/dsh-plugin-x: import failed (see console for the import error)\n";
+        assert_eq!(
+            extract_plugin_refs(import_failed),
+            vec!["@scope/dsh-plugin-x"]
+        );
     }
 
     #[test]

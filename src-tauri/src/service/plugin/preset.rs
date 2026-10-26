@@ -607,6 +607,25 @@ mod tests {
     }
 
     #[test]
+    fn office_kit_requires_core_with_user_text_api() {
+        let entry = load_presets_for_test()
+            .into_iter()
+            .find(|p| p.id == "dsh-office-kit")
+            .expect("dsh-office-kit");
+        assert!(entry.unsupported_on(Some("0.2.0-rc.2")));
+        for core in ["0.2.1-rc.1", "0.2.1-rc.2", "0.2.1"] {
+            assert!(!entry.unsupported_on(Some(core)), "core={core}");
+        }
+        assert_eq!(
+            entry
+                .version
+                .as_ref()
+                .and_then(|version| version.plugin_req_for_core(Some("0.2.1-rc.2"))),
+            Some("latest")
+        );
+    }
+
+    #[test]
     fn prerelease_core_in_same_generation_keeps_plugins() {
         let mut entry = load_presets_for_test()
             .into_iter()
